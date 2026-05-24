@@ -1,0 +1,6 @@
+{
+  "name": "Sterling Vault",
+  "description": "A premium, ultra-smooth silver savings scheme platform styled with a futuristic fintech aesthetic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

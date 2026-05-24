@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Inner glowing ambient gradient backup circle -->
+    <path
+        android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0"
+        android:fillColor="#15171C" />
+    <!-- Pure polished platinum silver coin outline -->
+    <path
+        android:pathData="M54,54m-26,0a26,26 0,1 1,52 0a26,26 0,1 1,-52 0"
+        android:strokeColor="#CBD5E1"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000" />
+    <!-- Inner coin star pattern -->
+    <path
+        android:pathData="M54,38L57,48L68,48L59,54L62,64L54,58L46,64L49,54L40,48L51,48Z"
+        android:fillColor="#F8FAFC" />
+    <!-- Secondary glowing tech nodes -->
+    <path
+        android:pathData="M54,18 L54,23 M54,85 L54,90 M18,54 L23,54 M85,54 L90,54"
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+</vector>
