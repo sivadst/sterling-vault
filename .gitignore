@@ -16,3 +16,11 @@
 local.properties
 .env
 debug.keystore
+.android-sdk/
+.android-cmdline-tools.zip
+.gradle-local/
+.gradle-bin/
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+vite-dev.log
