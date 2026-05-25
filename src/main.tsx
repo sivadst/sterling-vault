@@ -1,12 +1,14 @@
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BarChart3,
+  BadgeCheck,
   Check,
   Cloud,
   CreditCard,
   Database,
   Download,
+  Fingerprint,
   Lock,
   LogOut,
   Plus,
@@ -16,8 +18,10 @@ import {
   Search,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   Trash2,
   Users,
+  WalletCards,
 } from "lucide-react";
 import "./styles.css";
 
@@ -56,7 +60,10 @@ type AppData = {
   logs: string[];
 };
 
-const STORE_KEY = "sterling-vault-web-state-v1";
+type CustomerDraft = Omit<Customer, "id" | "amountPaid" | "startDate" | "maturityDate" | "status">;
+type PaymentDraft = Omit<Payment, "id" | "paymentDate">;
+
+const STORE_KEY = "sterling-vault-web-state-v2";
 const MONTHS = 11;
 const adminPin = "8888";
 
@@ -64,6 +71,7 @@ const seedCustomers: Customer[] = [
   makeCustomer(1, "Sarah Jenkins", "+91 98455 12091", "sarah.j@slvr.io", 5000, 88.5, "Scheme locked during Akshaya Tritiya"),
   makeCustomer(2, "Rajesh Kumar", "+91 97722 55431", "rajesh.kumar@gmail.com", 10000, 91.2, "Looking for heavy silver ornament sets upon maturity"),
   makeCustomer(3, "Elena Rostova", "+91 81232 44335", "elena.ros@icloud.com", 3500, 89, "Regular saver"),
+  makeCustomer(4, "Neha Iyer", "+91 90115 77102", "neha@vaultcraft.in", 7500, 92.8, "Prefers quarterly reviews"),
 ];
 
 const seedPayments: Payment[] = [
@@ -72,6 +80,8 @@ const seedPayments: Payment[] = [
   makePayment(3, 1, 3, 5000, "UPI", "TXN1082"),
   makePayment(4, 2, 1, 10000, "UPI", "TXN4022"),
   makePayment(5, 2, 2, 10000, "BANK", "TXN0981"),
+  makePayment(6, 3, 1, 3500, "CARD", "TXN2228"),
+  makePayment(7, 4, 1, 7500, "BANK", "TXN5510"),
 ];
 
 function makeCustomer(
@@ -159,13 +169,17 @@ function formatDate(value: number) {
   return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(value);
 }
 
-function formatLog(message: string) {
-  return `[${new Intl.DateTimeFormat("en-IN", {
+function formatClock(value: number) {
+  return new Intl.DateTimeFormat("en-IN", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-  }).format(Date.now())}] ${message}`;
+  }).format(value);
+}
+
+function formatLog(message: string) {
+  return `[${formatClock(Date.now())}] ${message}`;
 }
 
 function silverGrams(customer: Customer) {
@@ -176,6 +190,10 @@ function pendingBalance(customer: Customer) {
   return Math.max(customer.monthlyAmount * MONTHS - customer.amountPaid, 0);
 }
 
+function percentagePaid(customer: Customer) {
+  return Math.min(100, (customer.amountPaid / (customer.monthlyAmount * MONTHS)) * 100);
+}
+
 function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
   const [data, setData] = useState<AppData>(() => loadData());
@@ -183,8 +201,15 @@ function App() {
   const [offline, setOffline] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState(false);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(data.customers[0]?.id ?? null);
+  const [detailPhase, setDetailPhase] = useState<"idle" | "loading">("idle");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORE_KEY, JSON.stringify(data));
@@ -212,18 +237,43 @@ function App() {
   }, [customers]);
 
   const monthlyCollections = useMemo(() => {
-    const labels = Array.from({ length: 4 }, (_, index) => {
+    const monthPairs = Array.from({ length: 4 }, (_, index) => {
       const d = new Date();
       d.setMonth(d.getMonth() - (3 - index));
-      return d.toLocaleString("en-IN", { month: "short" });
+      return { key: d.getMonth(), label: d.toLocaleString("en-IN", { month: "short" }) };
     });
-    return labels.map((label) => ({
+
+    return monthPairs.map(({ key, label }) => ({
       label,
       amount: payments
-        .filter((payment) => new Date(payment.paymentDate).toLocaleString("en-IN", { month: "short" }) === label)
+        .filter((payment) => new Date(payment.paymentDate).getMonth() === key)
         .reduce((sum, payment) => sum + payment.amount, 0),
     }));
   }, [payments]);
+
+  useEffect(() => {
+    setDetailPhase("loading");
+    const timeout = window.setTimeout(() => setDetailPhase("idle"), 180);
+    return () => window.clearTimeout(timeout);
+  }, [selectedCustomerId]);
+
+  useEffect(() => {
+    if (pin.length === 4) {
+      if (pin === adminPin) {
+        setAdminUnlocked(true);
+        setPin("");
+        setPinError(false);
+        addLog("Admin controls unlocked.");
+      } else {
+        setPin("");
+        setPinError(true);
+        addLog("Admin unlock failed: invalid PIN.");
+        const timeout = window.setTimeout(() => setPinError(false), 280);
+        return () => window.clearTimeout(timeout);
+      }
+    }
+    return undefined;
+  }, [pin]);
 
   function addLog(message: string) {
     setData((current) => ({ ...current, logs: [formatLog(message), ...current.logs].slice(0, 40) }));
@@ -234,22 +284,25 @@ function App() {
       addLog("Sync skipped: device is offline.");
       return;
     }
+
     setSyncing(true);
     addLog("Connecting to secure cloud cluster...");
+
     window.setTimeout(() => {
       addLog(`Uploaded ${customers.length} accounts and ${payments.length} receipts. Integrity verified.`);
       setSyncing(false);
     }, 900);
   }
 
-  function saveCustomer(customer: Omit<Customer, "id" | "amountPaid" | "startDate" | "maturityDate" | "status">) {
+  function saveCustomer(customer: CustomerDraft) {
     const id = Math.max(0, ...customers.map((item) => item.id)) + 1;
+    const now = Date.now();
     const newCustomer: Customer = {
       ...customer,
       id,
       amountPaid: 0,
-      startDate: Date.now(),
-      maturityDate: Date.now() + MONTHS * 30 * 24 * 60 * 60 * 1000,
+      startDate: now,
+      maturityDate: now + MONTHS * 30 * 24 * 60 * 60 * 1000,
       status: "ACTIVE",
     };
     setData((current) => ({ ...current, customers: [...current.customers, newCustomer] }));
@@ -268,7 +321,7 @@ function App() {
     addLog(`Archived and deleted records for ${name}.`);
   }
 
-  function addPayment(payment: Omit<Payment, "id" | "paymentDate">) {
+  function addPayment(payment: PaymentDraft) {
     const id = Math.max(0, ...payments.map((item) => item.id)) + 1;
     const nextPayments = [...payments, { ...payment, id, paymentDate: Date.now() }];
     setData((current) => ({ ...current, payments: nextPayments, customers: withPaidTotals(current.customers, nextPayments) }));
@@ -288,6 +341,10 @@ function App() {
       logs: [formatLog("Demo dataset restored.")],
     });
     setSelectedCustomerId(1);
+    setScreen("dashboard");
+    setAdminUnlocked(false);
+    setPin("");
+    setPinError(false);
   }
 
   function exportJson() {
@@ -301,55 +358,60 @@ function App() {
   }
 
   function verifyPin(value: string) {
+    setPinError(false);
     setPin(value);
-    if (value.length === 4) {
-      if (value === adminPin) {
-        setAdminUnlocked(true);
-        setPin("");
-        addLog("Admin controls unlocked.");
-      } else {
-        setPin("");
-        addLog("Admin unlock failed: invalid PIN.");
-      }
-    }
+  }
+
+  function toggleOffline() {
+    setOffline((current) => {
+      const next = !current;
+      addLog(`Mode switched: ${next ? "OFFLINE Mode Enabled." : "ONLINE Sync Connected."}`);
+      return next;
+    });
   }
 
   return (
-    <div className="app-shell">
+    <div className={mounted ? "app-shell mounted" : "app-shell"}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">SV</div>
-          <div>
+          <div className="brand-copy">
             <strong>Sterling Vault</strong>
             <span>Silver savings ledger</span>
           </div>
         </div>
-        <nav aria-label="Primary">
+
+        <nav aria-label="Primary" className="sidebar-nav">
           <NavButton icon={<BarChart3 />} label="Status" active={screen === "dashboard"} onClick={() => setScreen("dashboard")} />
           <NavButton icon={<Users />} label="Ledger" active={screen === "customers"} onClick={() => setScreen("customers")} />
           <NavButton icon={<Receipt />} label="Receipts" active={screen === "receipts"} onClick={() => setScreen("receipts")} />
           <NavButton icon={<Lock />} label="Admin" active={screen === "admin"} onClick={() => setScreen("admin")} />
         </nav>
+
         <div className="sync-card">
           <div className="sync-line">
             <Cloud size={18} />
             <strong>{offline ? "Offline mode" : syncing ? "Syncing" : "Cloud ready"}</strong>
           </div>
-          <p>{payments.length} receipts mirrored across {customers.length} ledgers.</p>
+          <p>
+            {payments.length} receipts mirrored across {customers.length} ledgers.
+          </p>
         </div>
       </aside>
 
       <main>
         <header className="topbar">
-          <div>
+          <div className="topbar-copy">
             <p className="eyebrow">Active portfolio</p>
             <h1>{screenTitle(screen)}</h1>
+            <p className="subhead">Calm, high-trust ledger operations for premium silver savings management.</p>
           </div>
+
           <div className="topbar-actions">
-            <button className="icon-button" title="Export backup" onClick={exportJson}>
+            <button type="button" className="icon-button" title="Export backup" onClick={exportJson}>
               <Download />
             </button>
-            <button className="primary-button" onClick={triggerSync}>
+            <button type="button" className="primary-button" onClick={triggerSync}>
               <RefreshCw size={18} />
               Sync
             </button>
@@ -369,26 +431,31 @@ function App() {
             onSelect={setSelectedCustomerId}
             onSave={saveCustomer}
             onDelete={deleteCustomer}
+            detailPhase={detailPhase}
           />
         )}
 
         {screen === "receipts" && (
-          <Receipts customers={customers} payments={payments} selectedCustomerId={selectedCustomer?.id ?? null} onAdd={addPayment} onRemove={removePayment} />
+          <Receipts
+            customers={customers}
+            payments={payments}
+            selectedCustomerId={selectedCustomer?.id ?? null}
+            onAdd={addPayment}
+            onRemove={removePayment}
+          />
         )}
 
         {screen === "admin" && (
           <Admin
             unlocked={adminUnlocked}
             pin={pin}
+            pinError={pinError}
             offline={offline}
             syncing={syncing}
             logs={data.logs}
             onPin={verifyPin}
             onLock={() => setAdminUnlocked(false)}
-            onToggleOffline={() => {
-              setOffline((value) => !value);
-              addLog(`Mode switched: ${offline ? "ONLINE Sync Connected" : "OFFLINE Mode Enabled"}.`);
-            }}
+            onToggleOffline={toggleOffline}
             onSync={triggerSync}
             onReset={resetDemoData}
             onExport={exportJson}
@@ -409,9 +476,19 @@ function screenTitle(screen: Screen) {
   return titles[screen];
 }
 
-function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+function NavButton({
+  icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
-    <button className={active ? "nav-button active" : "nav-button"} onClick={onClick}>
+    <button type="button" className={active ? "nav-button active" : "nav-button"} onClick={onClick} aria-pressed={active}>
       {icon}
       <span>{label}</span>
     </button>
@@ -435,13 +512,33 @@ function Dashboard({
   return (
     <section className="content-grid">
       <div className="metric-row">
-        <Metric icon={<Users />} label="Active customers" value={metrics.activeCustomers.toString()} sub={`${customers.length} total ledgers`} />
-        <Metric icon={<CreditCard />} label="Collections" value={formatCurrency(metrics.totalCollections)} sub={`${payments.length} receipts posted`} />
-        <Metric icon={<Database />} label="Pending" value={formatCurrency(metrics.totalPending)} sub="Across 11 month plans" />
-        <Metric icon={<ShieldCheck />} label="Silver reserve" value={`${metrics.silverReserve.toFixed(1)}g`} sub="At locked rates" />
+        <MetricCard
+          icon={<Users />}
+          label="Active customers"
+          value={<AnimatedCount value={metrics.activeCustomers} />}
+          sub={`${customers.length} total ledgers`}
+        />
+        <MetricCard
+          icon={<CreditCard />}
+          label="Collections"
+          value={<AnimatedMoney value={metrics.totalCollections} />}
+          sub={`${payments.length} receipts posted`}
+        />
+        <MetricCard
+          icon={<WalletCards />}
+          label="Pending"
+          value={<AnimatedMoney value={metrics.totalPending} />}
+          sub="Across 11 month plans"
+        />
+        <MetricCard
+          icon={<ShieldCheck />}
+          label="Silver reserve"
+          value={<AnimatedFloat value={metrics.silverReserve} suffix="g" />}
+          sub="At locked rates"
+        />
       </div>
 
-      <div className="panel wide">
+      <div className="panel wide panel-chart">
         <div className="panel-title">
           <div>
             <p className="eyebrow">Collections</p>
@@ -449,9 +546,10 @@ function Dashboard({
           </div>
           <span className="status-pill">Live</span>
         </div>
+
         <div className="bars">
-          {monthlyCollections.map((item) => (
-            <div className="bar-item" key={item.label}>
+          {monthlyCollections.map((item, index) => (
+            <div className="bar-item" key={item.label} style={{ animationDelay: `${index * 90}ms` }}>
               <div className="bar-track">
                 <div className="bar-fill" style={{ height: `${Math.max(8, (item.amount / maxMonth) * 100)}%` }} />
               </div>
@@ -469,11 +567,12 @@ function Dashboard({
             <h2>Ledger health</h2>
           </div>
         </div>
+
         <div className="health-list">
-          {customers.map((customer) => {
-            const progress = Math.min(100, (customer.amountPaid / (customer.monthlyAmount * MONTHS)) * 100);
+          {customers.map((customer, index) => {
+            const progress = percentagePaid(customer);
             return (
-              <div className="health-row" key={customer.id}>
+              <div className="health-row" key={customer.id} style={{ animationDelay: `${index * 45}ms` }}>
                 <div>
                   <strong>{customer.name}</strong>
                   <span>{progress.toFixed(0)}% funded</span>
@@ -492,15 +591,18 @@ function Dashboard({
             <h2>Receipts</h2>
           </div>
         </div>
+
         <div className="receipt-list">
-          {newestPayments.map((payment) => {
+          {newestPayments.map((payment, index) => {
             const customer = customers.find((item) => item.id === payment.customerId);
             return (
-              <div className="receipt-row" key={payment.id}>
+              <div className="receipt-row" key={payment.id} style={{ animationDelay: `${index * 55}ms` }}>
                 <Receipt size={18} />
                 <div>
                   <strong>{customer?.name ?? "Unknown"}</strong>
-                  <span>{formatDate(payment.paymentDate)} via {payment.paymentMethod}</span>
+                  <span>
+                    {formatDate(payment.paymentDate)} via {payment.paymentMethod}
+                  </span>
                 </div>
                 <b>{formatCurrency(payment.amount)}</b>
               </div>
@@ -512,7 +614,7 @@ function Dashboard({
   );
 }
 
-function Metric({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string; sub: string }) {
+function MetricCard({ icon, label, value, sub }: { icon: ReactNode; label: string; value: ReactNode; sub: string }) {
   return (
     <div className="metric">
       <div className="metric-icon">{icon}</div>
@@ -523,6 +625,58 @@ function Metric({ icon, label, value, sub }: { icon: React.ReactNode; label: str
   );
 }
 
+function AnimatedCount({ value }: { value: number }) {
+  const current = useCountUp(value, 700, 0);
+  return <>{current.toLocaleString("en-IN")}</>;
+}
+
+function AnimatedMoney({ value }: { value: number }) {
+  const current = useCountUp(value, 780, 0);
+  return <>{formatCurrency(current)}</>;
+}
+
+function AnimatedFloat({ value, suffix = "" }: { value: number; suffix?: string }) {
+  const current = useCountUp(value, 780, 1);
+  return (
+    <>
+      {current.toFixed(1)}
+      {suffix}
+    </>
+  );
+}
+
+function useCountUp(target: number, duration: number, fractionDigits: number) {
+  const [value, setValue] = useState(0);
+  const startRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let frame = 0;
+    const start = (time: number) => {
+      startRef.current = time;
+      tick(time);
+    };
+
+    const tick = (time: number) => {
+      const startTime = startRef.current ?? time;
+      const progress = Math.min(1, (time - startTime) / duration);
+      const next = target * easeOutCubic(progress);
+      setValue(Number(next.toFixed(fractionDigits)));
+      if (progress < 1) {
+        frame = window.requestAnimationFrame(tick);
+      }
+    };
+
+    frame = window.requestAnimationFrame(start);
+    return () => window.cancelAnimationFrame(frame);
+  }, [target, duration, fractionDigits]);
+
+  return value;
+}
+
+function easeOutCubic(value: number) {
+  return 1 - Math.pow(1 - value, 3);
+}
+
 function Customers({
   customers,
   selectedCustomer,
@@ -531,14 +685,16 @@ function Customers({
   onSelect,
   onSave,
   onDelete,
+  detailPhase,
 }: {
   customers: Customer[];
   selectedCustomer?: Customer;
   search: string;
   setSearch: (value: string) => void;
   onSelect: (id: number) => void;
-  onSave: (customer: Omit<Customer, "id" | "amountPaid" | "startDate" | "maturityDate" | "status">) => void;
+  onSave: (customer: CustomerDraft) => void;
   onDelete: (id: number) => void;
+  detailPhase: "idle" | "loading";
 }) {
   return (
     <section className="split-layout">
@@ -547,9 +703,16 @@ function Customers({
           <Search size={18} />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customer, mobile, email..." />
         </div>
+
         <div className="customer-list">
-          {customers.map((customer) => (
-            <button className={selectedCustomer?.id === customer.id ? "customer-row selected" : "customer-row"} key={customer.id} onClick={() => onSelect(customer.id)}>
+          {customers.map((customer, index) => (
+            <button
+              type="button"
+              className={selectedCustomer?.id === customer.id ? "customer-row selected" : "customer-row"}
+              key={customer.id}
+              onClick={() => onSelect(customer.id)}
+              style={{ animationDelay: `${index * 35}ms` }}
+            >
               <span>{customer.name}</span>
               <small>{customer.phone}</small>
               <b>{formatCurrency(customer.amountPaid)}</b>
@@ -558,7 +721,7 @@ function Customers({
         </div>
       </div>
 
-      <div className="panel detail-panel">
+      <div className="panel detail-panel" data-loading={detailPhase === "loading"}>
         {selectedCustomer ? (
           <>
             <div className="panel-title">
@@ -566,22 +729,40 @@ function Customers({
                 <p className="eyebrow">Customer</p>
                 <h2>{selectedCustomer.name}</h2>
               </div>
-              <button className="danger-button" onClick={() => onDelete(selectedCustomer.id)} title="Delete customer">
+              <button type="button" className="danger-button" onClick={() => onDelete(selectedCustomer.id)} title="Delete customer">
                 <Trash2 size={17} />
               </button>
             </div>
-            <div className="detail-stats">
-              <Metric icon={<CreditCard />} label="Paid" value={formatCurrency(selectedCustomer.amountPaid)} sub={`${silverGrams(selectedCustomer).toFixed(1)}g silver`} />
-              <Metric icon={<Database />} label="Pending" value={formatCurrency(pendingBalance(selectedCustomer))} sub={`${MONTHS} month plan`} />
-            </div>
-            <dl className="info-grid">
-              <div><dt>Phone</dt><dd>{selectedCustomer.phone}</dd></div>
-              <div><dt>Email</dt><dd>{selectedCustomer.email || "Not set"}</dd></div>
-              <div><dt>Monthly</dt><dd>{formatCurrency(selectedCustomer.monthlyAmount)}</dd></div>
-              <div><dt>Locked rate</dt><dd>INR {selectedCustomer.initialSilverRate}/g</dd></div>
-              <div><dt>Maturity</dt><dd>{formatDate(selectedCustomer.maturityDate)}</dd></div>
-              <div><dt>Notes</dt><dd>{selectedCustomer.notes || "None"}</dd></div>
-            </dl>
+
+            {detailPhase === "loading" ? (
+              <CustomerSkeleton />
+            ) : (
+              <>
+                <div className="detail-stats">
+                  <MetricCard
+                    icon={<CreditCard />}
+                    label="Paid"
+                    value={formatCurrency(selectedCustomer.amountPaid)}
+                    sub={`${silverGrams(selectedCustomer).toFixed(1)}g silver`}
+                  />
+                  <MetricCard
+                    icon={<Database />}
+                    label="Pending"
+                    value={formatCurrency(pendingBalance(selectedCustomer))}
+                    sub={`${MONTHS} month plan`}
+                  />
+                </div>
+
+                <dl className="info-grid">
+                  <Info label="Phone" value={selectedCustomer.phone} />
+                  <Info label="Email" value={selectedCustomer.email || "Not set"} />
+                  <Info label="Monthly" value={formatCurrency(selectedCustomer.monthlyAmount)} />
+                  <Info label="Locked rate" value={`INR ${selectedCustomer.initialSilverRate}/g`} />
+                  <Info label="Maturity" value={formatDate(selectedCustomer.maturityDate)} />
+                  <Info label="Notes" value={selectedCustomer.notes || "None"} />
+                </dl>
+              </>
+            )}
           </>
         ) : (
           <EmptyState title="No customer selected" />
@@ -593,7 +774,33 @@ function Customers({
   );
 }
 
-function CustomerForm({ onSave }: { onSave: (customer: Omit<Customer, "id" | "amountPaid" | "startDate" | "maturityDate" | "status">) => void }) {
+function CustomerSkeleton() {
+  return (
+    <div className="customer-skeleton">
+      <div className="skeleton-grid">
+        <div className="skeleton-card" />
+        <div className="skeleton-card" />
+      </div>
+      <div className="skeleton-lines">
+        <div className="skeleton-line short" />
+        <div className="skeleton-line" />
+        <div className="skeleton-line" />
+        <div className="skeleton-line medium" />
+      </div>
+    </div>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+function CustomerForm({ onSave }: { onSave: (customer: CustomerDraft) => void }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -629,14 +836,17 @@ function CustomerForm({ onSave }: { onSave: (customer: Omit<Customer, "id" | "am
         </div>
         <Plus size={20} />
       </div>
+
       <Field label="Name" value={name} onChange={setName} required />
       <Field label="Phone" value={phone} onChange={setPhone} required />
       <Field label="Email" value={email} onChange={setEmail} />
+
       <div className="form-grid">
         <Field label="Monthly INR" value={monthlyAmount} onChange={setMonthlyAmount} type="number" required />
         <Field label="Rate INR/g" value={initialSilverRate} onChange={setInitialSilverRate} type="number" required />
       </div>
-      <Field label="Notes" value={notes} onChange={setNotes} />
+
+      <Field label="Notes" value={notes} onChange={setNotes} multiline />
       <button className="primary-button" type="submit">
         <Save size={18} />
         Save customer
@@ -655,7 +865,7 @@ function Receipts({
   customers: Customer[];
   payments: Payment[];
   selectedCustomerId: number | null;
-  onAdd: (payment: Omit<Payment, "id" | "paymentDate">) => void;
+  onAdd: (payment: PaymentDraft) => void;
   onRemove: (id: number) => void;
 }) {
   const [customerId, setCustomerId] = useState(selectedCustomerId?.toString() ?? "");
@@ -695,19 +905,24 @@ function Receipts({
           </div>
           <Smartphone size={20} />
         </div>
+
         <label className="field">
           <span>Customer</span>
           <select value={customerId} onChange={(event) => setCustomerId(event.target.value)} required>
             <option value="">Select customer</option>
             {customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>{customer.name}</option>
+              <option key={customer.id} value={customer.id}>
+                {customer.name}
+              </option>
             ))}
           </select>
         </label>
+
         <div className="form-grid">
           <Field label="Installment" value={installmentIndex} onChange={setInstallmentIndex} type="number" required />
           <Field label="Amount" value={amount} onChange={setAmount} type="number" required />
         </div>
+
         <label className="field">
           <span>Method</span>
           <select value={method} onChange={(event) => setMethod(event.target.value as PaymentMethod)}>
@@ -717,8 +932,10 @@ function Receipts({
             <option>BANK</option>
           </select>
         </label>
+
         <Field label="Reference" value={referenceNo} onChange={setReferenceNo} />
-        <Field label="Notes" value={notes} onChange={setNotes} />
+        <Field label="Notes" value={notes} onChange={setNotes} multiline />
+
         <button className="primary-button" type="submit">
           <Check size={18} />
           Post receipt
@@ -732,6 +949,7 @@ function Receipts({
             <h2>Receipt history</h2>
           </div>
         </div>
+
         <div className="table-wrap">
           <table>
             <thead>
@@ -741,7 +959,7 @@ function Receipts({
                 <th>Method</th>
                 <th>Reference</th>
                 <th>Amount</th>
-                <th></th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -755,7 +973,7 @@ function Receipts({
                     <td>{payment.referenceNo || "-"}</td>
                     <td>{formatCurrency(payment.amount)}</td>
                     <td>
-                      <button className="icon-button small" title="Delete receipt" onClick={() => onRemove(payment.id)}>
+                      <button type="button" className="icon-button small" title="Delete receipt" onClick={() => onRemove(payment.id)}>
                         <Trash2 />
                       </button>
                     </td>
@@ -773,6 +991,7 @@ function Receipts({
 function Admin({
   unlocked,
   pin,
+  pinError,
   offline,
   syncing,
   logs,
@@ -785,6 +1004,7 @@ function Admin({
 }: {
   unlocked: boolean;
   pin: string;
+  pinError: boolean;
   offline: boolean;
   syncing: boolean;
   logs: string[];
@@ -798,17 +1018,43 @@ function Admin({
   if (!unlocked) {
     return (
       <section className="admin-lock">
-        <div className="panel pin-panel">
-          <ShieldCheck size={36} />
-          <h2>Secure admin access</h2>
-          <div className="pin-dots">{Array.from({ length: 4 }, (_, index) => <span className={pin.length > index ? "filled" : ""} key={index} />)}</div>
+        <div className={pinError ? "panel pin-panel shake" : "panel pin-panel"}>
+          <div className="pin-hero">
+            <div className="pin-emblem">
+              <Fingerprint size={34} />
+            </div>
+            <div>
+              <h2>Secure admin access</h2>
+              <p>Enter the 4-digit vault PIN to unlock controls.</p>
+            </div>
+          </div>
+
+          <div className="pin-dots" aria-label="PIN entry">
+            {Array.from({ length: 4 }, (_, index) => (
+              <span className={pin.length > index ? "filled" : ""} key={index} />
+            ))}
+          </div>
+
           <div className="pin-grid">
             {"123456789".split("").map((digit) => (
-              <button key={digit} onClick={() => onPin(pin + digit)}>{digit}</button>
+              <button key={digit} type="button" onClick={() => onPin(pin + digit)}>
+                {digit}
+              </button>
             ))}
-            <button onClick={() => onPin("")}>Clear</button>
-            <button onClick={() => onPin(pin + "0")}>0</button>
-            <button onClick={() => onPin(pin.slice(0, -1))}>Back</button>
+            <button type="button" onClick={() => onPin("")}>
+              Clear
+            </button>
+            <button type="button" onClick={() => onPin(pin + "0")}>
+              0
+            </button>
+            <button type="button" onClick={() => onPin(pin.slice(0, -1))}>
+              Back
+            </button>
+          </div>
+
+          <div className="pin-footnote">
+            <ShieldCheck size={16} />
+            <span>Vault-grade access protection</span>
           </div>
         </div>
       </section>
@@ -818,44 +1064,51 @@ function Admin({
   return (
     <section className="content-grid">
       <div className="metric-row">
-        <button className={offline ? "metric action active" : "metric action"} onClick={onToggleOffline}>
+        <button type="button" className={offline ? "metric action active" : "metric action"} onClick={onToggleOffline}>
           <Cloud />
           <span>Network mode</span>
           <strong>{offline ? "Offline" : "Online"}</strong>
           <small>Toggle local-first behavior</small>
         </button>
-        <button className="metric action" onClick={onSync}>
+
+        <button type="button" className="metric action" onClick={onSync}>
           <RefreshCw />
           <span>Cloud mirror</span>
           <strong>{syncing ? "Syncing" : "Ready"}</strong>
           <small>Push local ledger state</small>
         </button>
-        <button className="metric action" onClick={onExport}>
+
+        <button type="button" className="metric action" onClick={onExport}>
           <Download />
           <span>Backup</span>
           <strong>JSON</strong>
           <small>Download ledger snapshot</small>
         </button>
-        <button className="metric action danger" onClick={onReset}>
+
+        <button type="button" className="metric action danger" onClick={onReset}>
           <Database />
           <span>Demo data</span>
           <strong>Reset</strong>
           <small>Restore sample portfolio</small>
         </button>
       </div>
+
       <div className="panel wide">
         <div className="panel-title">
           <div>
             <p className="eyebrow">Operations</p>
             <h2>Sync log</h2>
           </div>
-          <button className="secondary-button" onClick={onLock}>
+          <button type="button" className="secondary-button" onClick={onLock}>
             <LogOut size={18} />
             Lock
           </button>
         </div>
+
         <div className="log-list">
-          {logs.map((log, index) => <code key={`${log}-${index}`}>{log}</code>)}
+          {logs.map((log, index) => (
+            <code key={`${log}-${index}`}>{log}</code>
+          ))}
         </div>
       </div>
     </section>
@@ -868,17 +1121,23 @@ function Field({
   onChange,
   type = "text",
   required = false,
+  multiline = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
   required?: boolean;
+  multiline?: boolean;
 }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <input value={value} type={type} required={required} onChange={(event) => onChange(event.target.value)} />
+      {multiline ? (
+        <textarea value={value} required={required} onChange={(event) => onChange(event.target.value)} rows={3} />
+      ) : (
+        <input value={value} type={type} required={required} onChange={(event) => onChange(event.target.value)} />
+      )}
     </label>
   );
 }
@@ -886,8 +1145,11 @@ function Field({
 function EmptyState({ title }: { title: string }) {
   return (
     <div className="empty-state">
-      <Database size={26} />
+      <div className="empty-icon">
+        <Database size={26} />
+      </div>
       <strong>{title}</strong>
+      <span>Choose a ledger to inspect balances and maturity details.</span>
     </div>
   );
 }
